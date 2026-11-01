@@ -14,6 +14,16 @@ The app also runs with no Supabase values at all. It then saves locally only, sh
 
 **Only `EXPO_PUBLIC_` values reach the app.** Never give a service-role key, secret key, JWT secret or database password that prefix. The app refuses to use a privileged key if one is configured.
 
+## Releasing
+
+Set the same new version in `app.json` (`expo.version`) and `package.json` (`version`), commit, and push to `main`. GitHub Actions then tests the code, builds an APK, and publishes it as a GitHub Release. Any other push does nothing.
+
+The workflow needs these repository secrets (Settings > Secrets and variables > Actions): `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `EXPO_PUBLIC_GAME_UUID`.
+
+Release APKs are currently signed with the Expo template's debug key. That's fine for installing directly, but Google Play needs your own signing key.
+
+On Windows, local native builds fail in a long project path, because of the 260-character limit. Build from a very short folder such as `D:\p`, or rely on the workflow.
+
 ## Checks
 
 ```bash

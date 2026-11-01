@@ -2,6 +2,8 @@
  * The one place that knows which game this app is, and which backend it talks to.
  * EXPO_PUBLIC_ values must be read as literal process.env.X for Expo to compile them in.
  */
+import packageJson from '../../package.json';
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Local rows use this when no game UUID is configured; they are adopted once one is. */
@@ -53,7 +55,7 @@ export const gameConfig = {
   slug: 'puzzlewala',
   /** Prefix of human-readable Child IDs, e.g. PW-7K92X4. */
   displayIdPrefix: 'PW',
-  appVersion: '1.0.0',
+  appVersion: packageJson.version,
   platform: 'android',
   /** Every local and remote game-specific query filters by this. */
   gameId: backendConfig?.gameId ?? LOCAL_GAME_ID,

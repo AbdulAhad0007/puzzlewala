@@ -1,0 +1,133 @@
+# Publishes a GitHub Release with an Android APK, only when the app version is bumped.
+#
+# To release: set the same new version in app.json (expo.version) and package.json (version),
+# commit, and push to main. Any other push does nothing.
+name: Release APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - app.json
+      - package.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare versions with the previous commit
+        id: check
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          app_now=$(jq -r '.expo.version' app.json)
+          pkg_now=$(jq -r '.version' package.json)
+
+          # A brand-new branch has no previous commit to compare with.
+          if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            app_before=$(git show "$BEFORE:app.json" | jq -r '.expo.version')
+            pkg_before=$(git show "$BEFORE:package.json" | jq -r '.version')
+          else
+            app_before=""
+            pkg_before=""
+          fi
+
+          should_release=false
+          if [ "$app_now" = "$app_before" ] && [ "$pkg_now" = "$pkg_before" ]; then
+            echo "Version unchanged ($app_now). Nothing to release."
+          elif [ "$app_now" = "$app_before" ] || [ "$pkg_now" = "$pkg_before" ]; then
+            echo "::warning::Only one file's version changed (app.json $app_now, package.json $pkg_now). Change both to release."
+          elif [ "$app_now" != "$pkg_now" ]; then
+            echo "::warning::Versions don't match (app.json $app_now, package.json $pkg_now). Set both to the same value to release."
+          elif git ls-remote --exit-code --tags origin "refs/tags/v$app_now" >/dev/null; then
+            echo "::warning::Release v$app_now already exists. Use a new version number."
+          else
+            should_release=true
+            echo "Releasing v$app_now."
+          fi
+
+          echo "should_release=$should_release" >> "$GITHUB_OUTPUT"
+          echo "version=$app_now" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+      EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+      EXPO_PUBLIC_GAME_UUID: ${{ secrets.EXPO_PUBLIC_GAME_UUID }}
+      VERSION: ${{ needs.check-version.outputs.version }}
+    steps:
+      - name: Require the cloud settings
+        # Without these the app would silently ship with cloud backup switched off.
+        run: |
+          for name in EXPO_PUBLIC_SUPABASE_URL EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY EXPO_PUBLIC_GAME_UUID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Add the $name secret in GitHub: Settings > Secrets and variables > Actions."
+              exit 1
+            fi
+          done
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and test
+        run: |
+          npx tsc --noEmit
+          npx jest
+
+      - name: Set the Android version code
+        # Must rise with every release, or Android refuses to treat it as an update.
+        run: |
+          jq --argjson code "$((GITHUB_RUN_NUMBER + 1))" '.expo.android.versionCode = $code' app.json > app.json.tmp
+          mv app.json.tmp app.json
+
+      - name: Generate the Android project
+        run: npx expo prebuild --platform android --no-install
+        env:
+          CI: 1
+
+      - name: Build the APK
+        working-directory: android
+        run: ./gradlew :app:assembleRelease --console=plain --no-daemon
+
+      - name: Name the APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk "PuzzleWala-v$VERSION.apk"
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: PuzzleWala v${{ env.VERSION }}
+          generate_release_notes: true
+          files: PuzzleWala-v${{ env.VERSION }}.apk
+          fail_on_unmatched_files: true
